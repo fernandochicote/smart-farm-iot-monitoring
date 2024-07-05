@@ -6,6 +6,7 @@ import org.apache.spark.sql.{Dataset, Row}
 import java.sql.Timestamp
 import scala.util.Try
 import org.apache.spark.sql.DataFrame
+import org.apache.spark.sql.functions._
 
 
 
@@ -107,9 +108,6 @@ object Main extends App {
   spark
     .sparkContext.setLogLevel("ERROR")
 
-  import spark.implicits._
-
-
 
 
   // Mapeo de sensores a zonas
@@ -133,7 +131,7 @@ object Main extends App {
 
   // Leer datos de Kafka para temperatura y humedad
 
-  val temperatureHumidityDF: Dataset[TemperatureHumidityData] = getKafkaStream(temperatureHumidityTopic, spark).map {
+  val temperatureHumidityDF: Dataset[TemperatureHumidityData] = getKafkaStream(temperatureHumidityTopic, spark).flatmap {
 
     case (value, timestamp) => {
       validarDatosSensorTemperatureHumidity(value, timestamp)
