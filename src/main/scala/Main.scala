@@ -4,31 +4,47 @@ import config.Config
 import org.apache.spark.sql.{Dataset, Row}
 
 import java.sql.Timestamp
+import scala.util.Try
+import org.apache.spark.sql.DataFrame
 
 
 
 object DataValidations {
 
-  def validarDatosSensorTemperatureHumidity( value: String, timestamp: Timestamp): TemperatureHumidityData = {
-    // TODO: Implementar validaciones
-    // TODO: Revisar si el valor de retorno es correcto (¿qué pasa si el valor no es correcto?) -> Ver Option, Try, Either    val parts = value.split(",") // "sensor1,12.12,1225221125"
+  def validarDatosSensorTemperatureHumidity(value: String, timestamp: Timestamp): Option[TemperatureHumidityData] = {
     val parts = value.split(",")
-    TemperatureHumidityData(parts(0), parts(1).toDouble, parts(2).toDouble, timestamp)
+    if (parts.length == 3) {
+      for {
+        temperature <- toDouble(parts(1))
+        humidity <- toDouble(parts(2))
+      } yield TemperatureHumidityData(parts(0), temperature, humidity, timestamp)
+    } else None
   }
 
-  def validarDatosSensorTemperatureHumiditySoilMoisture(value: String, timestamp: Timestamp): SoilMoistureData = {
-    // TODO: Implementar validaciones
-    // TODO: Revisar si el valor de retorno es correcto (¿qué pasa si el valor no es correcto?)
+  def validarDatosSensorTemperatureHumiditySoilMoisture(value: String, timestamp: Timestamp): Option[SoilMoistureData] = {
     val parts = value.split(",")
-    SoilMoistureData(parts(0), parts(1).toDouble, Timestamp.valueOf(parts(2)))
+    if (parts.length == 3) {
+      for {
+        moisture <- toDouble(parts(1))
+        ts <- toTimestamp(parts(2))
+      } yield SoilMoistureData(parts(0), moisture, ts)
+    } else None
   }
 
-  def validarDatosSensorCO2(value: String, timestamp: Timestamp): CO2Data = {
-    // TODO: Implementar validaciones
-    // TODO: Revisar si el valor de retorno es correcto (¿qué pasa si el valor no es correcto?) -> Ver Option, Try, Either
+  def validarDatosSensorCO2(value: String, timestamp: Timestamp): Option[CO2Data] = {
     val parts = value.split(",")
-    CO2Data(parts(0), parts(1).toDouble, Timestamp.valueOf(parts(2)))
+    if (parts.length == 3) {
+      for {
+        co2 <- toDouble(parts(1))
+        ts <- toTimestamp(parts(2))
+      } yield CO2Data(parts(0), co2, ts)
+    } else None
   }
+
+  private def toDouble(value: String): Option[Double] = Try(value.toDouble).toOption
+
+  private def toTimestamp(value: String): Option[Timestamp] = Try(Timestamp.valueOf(value)).toOption
+
 }
 
 object Main extends App {
@@ -40,17 +56,10 @@ object Main extends App {
 
   case class SensorData(sensorId: String, value: Double, timestamp: Timestamp)
 
-  case class SensorType(name: String, sensorDataReader: (String) => SensorData, topic: String)
 
   // Clase para representar los datos de un sensor de humedad del suelo
   case class SoilMoistureData(sensorId: String, soilMoisture: Double, timestamp: Timestamp)
 
-  case class UnifiedData(sensorId: String,
-                         timestamp: Timestamp,
-                         temperature: Option[Double] = None,
-                         humidity: Option[Double] = None,
-                         co2Level: Option[Double] = None,
-                         soilMoisture: Option[Double] = None)
 
   // Clase para representar los datos de un sensor de temperatura y humedad
   case class TemperatureHumidityData(sensorId: String, temperature: Double, humidity: Double, timestamp: Timestamp, zoneId: Option[String] = None)
@@ -60,18 +69,11 @@ object Main extends App {
 
   val sensorIdToZoneId = udf((sensorId: String) => sensorToZoneMap.getOrElse(sensorId, "unknown"))
 
-  import org.apache.spark.sql.DataFrame
-  def writeData(path: String, format: String, df: DataFrame, partitions: Seq[String] = Seq.empty, checkPointPath: Option[String] = None) = {
-    val writer = df.write.format(format)
-    if (partitions.nonEmpty) writer.partitionBy(partitions: _*)
-    if (checkPointPath.isDefined) writer.option("checkpointLocation", checkPointPath.get)
-    writer.save(path)
-  }
 
   def readData(path: String, format: String)(implicit spark: SparkSession) =
     spark.readStream.format(format).load(path)
 
-  // Devuelve un Daatset con una tupla de (valor, timestamp), donde el campo valor es un string
+  // Devuelve un Dataset con una tupla de (valor, timestamp), donde el campo valor es un string
   def getKafkaStream(topic: String , spark: SparkSession) = {
     import spark.implicits._
     spark.readStream
@@ -130,10 +132,6 @@ object Main extends App {
     "sensor9" -> "zone3")
 
   // Leer datos de Kafka para temperatura y humedad
-
-
-  import java.sql.Timestamp
-
 
   val temperatureHumidityDF: Dataset[TemperatureHumidityData] = getKafkaStream(temperatureHumidityTopic, spark).map {
 
