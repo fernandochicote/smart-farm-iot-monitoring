@@ -22,3 +22,10 @@ Se han creado las siguientes funciones auxiliares:
 es exitosa y None si falla.
 - **toTimestamp**: Esta función toma un String y trata de convertirlo a Timestamp usando Timestamp.valueOf. 
 Devuelve Some(Timestamp) si la conversión es exitosa y None si falla.
+
+
+*Apunte:
+
+Al cambiar a option es necesario cambiar la creacion del dataset usando la funcion validarDatosSensorTemperatureHumidity.
+Si se usa la función validarDatosSensorTemperatureHumidity como devuelve un Option[TemperatureHumidityData], 
+debemos usar flatMap en lugar de map para manejar este caso adecuadamente, de manera que solo los valores Some se incluyan en el Dataset.

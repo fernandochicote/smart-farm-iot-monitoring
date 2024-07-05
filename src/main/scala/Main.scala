@@ -133,7 +133,7 @@ object Main extends App {
 
   // Leer datos de Kafka para temperatura y humedad
 
-  val temperatureHumidityDF: Dataset[TemperatureHumidityData] = getKafkaStream(temperatureHumidityTopic, spark).map {
+  val temperatureHumidityDF: Dataset[TemperatureHumidityData] = getKafkaStream(temperatureHumidityTopic, spark).flatMap {
 
     case (value, timestamp) => {
       validarDatosSensorTemperatureHumidity(value, timestamp)
