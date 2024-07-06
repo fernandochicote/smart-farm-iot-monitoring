@@ -1,12 +1,33 @@
-import DataValidations.{validarDatosSensorCO2, validarDatosSensorTemperatureHumidity, validarDatosSensorTemperatureHumiditySoilMoisture}
-import Main.{CO2Data, SoilMoistureData, TemperatureHumidityData}
-import config.Config
-import org.apache.spark.sql.{Dataset, Row}
+// Importaciones de Spark
+import org.apache.spark.sql.{Dataset, Row, SparkSession}
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.streaming.Trigger
+import org.apache.spark.sql.expressions.UserDefinedFunction
 
+
+// Importaciones estándar de Java y Scala
 import java.sql.Timestamp
 import scala.util.Try
-import org.apache.spark.sql.DataFrame
 
+// Importaciones del proyecto
+import config.Config
+import config.Config._
+import DataValidations.{validarDatosSensorCO2, validarDatosSensorTemperatureHumidity, validarDatosSensorTemperatureHumiditySoilMoisture}
+import Main.{CO2Data, SoilMoistureData, TemperatureHumidityData}
+import SensorId._
+import ZoneId._
+
+// Enumeraciones para sensorId
+object SensorId extends Enumeration {
+  type SensorId = Value
+  val Sensor1, Sensor2, Sensor3, Sensor4, Sensor5, Sensor6, Sensor7, Sensor8, Sensor9 = Value
+}
+
+// Enumeraciones para zoneId
+object ZoneId extends Enumeration {
+  type ZoneId = Value
+  val Zone1, Zone2, Zone3 = Value
+}
 
 
 object DataValidations {
@@ -15,9 +36,10 @@ object DataValidations {
     val parts = value.split(",")
     if (parts.length == 3) {
       for {
+        sensorId <- toSensorId(parts(0))
         temperature <- toDouble(parts(1))
         humidity <- toDouble(parts(2))
-      } yield TemperatureHumidityData(parts(0), temperature, humidity, timestamp)
+      } yield TemperatureHumidityData(sensorId, temperature, humidity, timestamp)
     } else None
   }
 
@@ -25,9 +47,10 @@ object DataValidations {
     val parts = value.split(",")
     if (parts.length == 3) {
       for {
+        sensorId <- toSensorId(parts(0))
         moisture <- toDouble(parts(1))
         ts <- toTimestamp(parts(2))
-      } yield SoilMoistureData(parts(0), moisture, ts)
+      } yield SoilMoistureData(sensorId, moisture, ts)
     } else None
   }
 
@@ -35,9 +58,10 @@ object DataValidations {
     val parts = value.split(",")
     if (parts.length == 3) {
       for {
+        sensorId <- toSensorId(parts(0))
         co2 <- toDouble(parts(1))
         ts <- toTimestamp(parts(2))
-      } yield CO2Data(parts(0), co2, ts)
+      } yield CO2Data(sensorId, co2, ts)
     } else None
   }
 
@@ -45,33 +69,31 @@ object DataValidations {
 
   private def toTimestamp(value: String): Option[Timestamp] = Try(Timestamp.valueOf(value)).toOption
 
+  private def toSensorId(value: String): Option[SensorId.Value] = Try(SensorId.withName(value)).toOption
+
+
 }
 
 object Main extends App {
 
-  import config.Config._
-  import org.apache.spark.sql.SparkSession
-  import org.apache.spark.sql.functions._
-  import org.apache.spark.sql.streaming.Trigger
-
-  case class SensorData(sensorId: String, value: Double, timestamp: Timestamp)
+  import spark.implicits._
 
 
   // Clase para representar los datos de un sensor de humedad del suelo
-  case class SoilMoistureData(sensorId: String, soilMoisture: Double, timestamp: Timestamp)
-
+  case class SoilMoistureData(sensorId: SensorId, soilMoisture: Double, timestamp: Timestamp)
 
   // Clase para representar los datos de un sensor de temperatura y humedad
-  case class TemperatureHumidityData(sensorId: String, temperature: Double, humidity: Double, timestamp: Timestamp, zoneId: Option[String] = None)
+  case class TemperatureHumidityData(sensorId: SensorId, temperature: Double, humidity: Double, timestamp: Timestamp, zoneId: Option[ZoneId] = None)
 
   // Clase para representar los datos de un sensor de nivel de CO2
-  case class CO2Data(sensorId: String, co2Level: Double, timestamp: Timestamp, zoneId: Option[String] = None)
+  case class CO2Data(sensorId: SensorId, co2Level: Double, timestamp: Timestamp, zoneId: Option[ZoneId] = None)
 
-  val sensorIdToZoneId = udf((sensorId: String) => sensorToZoneMap.getOrElse(sensorId, "unknown"))
+  // UDF para obtener zoneId
+  val sensorIdToZoneId: UserDefinedFunction = udf((sensorId: String) => {
+    Try(SensorId.withName(sensorId)).toOption.flatMap(sensorToZoneMap.get).map(_.toString).getOrElse("unknown")
+  })
 
 
-  def readData(path: String, format: String)(implicit spark: SparkSession) =
-    spark.readStream.format(format).load(path)
 
   // Devuelve un Dataset con una tupla de (valor, timestamp), donde el campo valor es un string
   def getKafkaStream(topic: String , spark: SparkSession) = {
@@ -86,12 +108,6 @@ object Main extends App {
       .as[(String, Timestamp)]
   }
 
-  def handleSensorData(df: Dataset[(String, Timestamp)], dataCaseClass: Function1[(String, Timestamp), SensorData])(implicit spark: SparkSession): DataFrame = {
-    import spark.implicits._
-
-    val sensorDataDf = df.map(dataCaseClass)
-    sensorDataDf.withColumn("zoneId", sensorIdToZoneId(col("sensorId")))
-  }
 
   // Configuración de Spark Session
   val spark = SparkSession.builder
@@ -104,32 +120,20 @@ object Main extends App {
     .config("spark.sql.shuffle.partitions", "10")
     .getOrCreate()
 
-  spark
-    .sparkContext.setLogLevel("ERROR")
-
-  import spark.implicits._
-
-
-
+  spark.sparkContext.setLogLevel("FATAL")
 
   // Mapeo de sensores a zonas
-  // Ejemplo: sensor1 -> zona1, sensor2 -> zona2
-  private type SensorId = String
-  private type ZoneId   = String
-
-  val Zone1: ZoneId = "zona1"
-
-  // Identifica la zona a la que pertenece un dispositivo
   private val sensorToZoneMap: Map[SensorId, ZoneId] = Map(
-    "sensor1" -> Zone1,
-    "sensor2" -> Zone1,
-    "sensor3" -> Zone1,
-    "sensor4" -> "zone2",
-    "sensor5" -> "zone2",
-    "sensor6" -> "zone2",
-    "sensor7" -> "zone3",
-    "sensor8" -> "zone3",
-    "sensor9" -> "zone3")
+    Sensor1 -> Zone1,
+    Sensor2 -> Zone1,
+    Sensor3 -> Zone1,
+    Sensor4 -> Zone2,
+    Sensor5 -> Zone2,
+    Sensor6 -> Zone2,
+    Sensor7 -> Zone3,
+    Sensor8 -> Zone3,
+    Sensor9 -> Zone3
+  )
 
   // Leer datos de Kafka para temperatura y humedad
 
