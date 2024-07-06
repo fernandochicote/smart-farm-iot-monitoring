@@ -34,7 +34,9 @@ debemos usar flatMap en lugar de map para manejar este caso adecuadamente, de ma
 ### Segunda refactorización
 
 Primer objetivo: Borrado de partes que no se usan.
+
 Segundo objetivo: Mejorar case classes para definir los sensores
+
 En las clases para definir lo sensores veo ya aplicadas buenas practicas, enumero:
 1. Ya estamos utilizando case class, lo cual es bueno.
 2. Ya se está utilizando Option para zoneId.
@@ -55,4 +57,24 @@ lo que mejora la seguridad del tipo y reduce errores.
 para modularizar el código y reutilizar la lógica de conversión.
 3. Manejo Seguro de Valores Nulos: Utilizamos Option y Try para manejar conversiones que pueden fallar, 
 evitando el uso de null.
+
+
+### Tercera refactorización
+Objetivo: Refactorizar el script KafkaDataGenerator
+1. Encapsulación de props y producer con private val: Encapsular estas variables para evitar que sean accesibles o 
+modificadas desde fuera del objeto KafkaDataGenerator.
+2. Se envuelve la llamada a producer.send(record) dentro de un Try para capturar cualquier excepción 
+que pueda lanzarse durante la ejecución de esta llamada.
+3. La funcion message ahora retorna un Failure con una excepción más específica 
+IllegalArgumentException cuando el topic no es válido.
+4. Se ha modificado la funcion generateAndSendData:
+   - El valor aleatorio generado se asigna a una variable value antes de pasarlo a sendData.
+   - Se maneja el resultado de sendData utilizando match para capturar Success y Failure, imprimiendo un mensaje adecuado para cada caso.
+5. Por ultimo se ha modificado el main para el lanzamiento del objeto:
+   - Los valores como 50 y 5000 se usaban directamente en el código (magic numbers). 
+   Se asignaron valores a constantes descriptivas unknownSensorInterval y delayBetweenMessages.
+   - Uso de una sintaxis de for comprehensiva, más funcional y legible.
+   - Asignacion de 'sensor_id' en una sola linea para aumentar la claridad del codigo.
+
+
 
