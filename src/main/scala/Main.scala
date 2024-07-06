@@ -139,10 +139,9 @@ object Main extends App {
 
   val temperatureHumidityDF: Dataset[TemperatureHumidityData] = getKafkaStream(temperatureHumidityTopic, spark).flatMap {
 
-    case (value, timestamp) => {
+    case (value, timestamp) =>
       validarDatosSensorTemperatureHumidity(value, timestamp)
 
-    }
   }
 
 
