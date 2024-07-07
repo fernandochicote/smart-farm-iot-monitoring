@@ -76,5 +76,43 @@ IllegalArgumentException cuando el topic no es válido.
    - Uso de una sintaxis de for comprehensiva, más funcional y legible.
    - Asignacion de 'sensor_id' en una sola linea para aumentar la claridad del codigo.
 
+### TEST
+No estoy modificando ningun test, yo por lo menos no vi ningun video explicativo dedicado (puede que fuese opcional)
+y sigo sin entender su funcionamiento. Me da Problemas al validar los sensores ya que ahora el SensorId es una
+enumeracion y la salida un option.
+
+### Cuarta refactorizacion
+Objetivo: Kafka y Spark
+
+1. No me ha dado tiempo casi a avanzar con el modulo de Kafka asi que no veo en condiciones de mejorar nada.
+2. Me voy a centrar en Spark y en ampliar las funcionalidades hechas solo para el sensor de temperatura y humedad.
+
+Primero introducimos las variables de configuracion de la sesion dentro del fichero Config.scala. Además elevamos 
+el setLogLevel a FATAL para disminuir la traza que nos deja en la consola al ejecutar el script
+
+Ordenamos todo el codigo y cambiamos de la API de Dataframes a la de Datasets, como se indica en los tips
+para la refactorizacion. Aunque luego la parte final trabajo con Dataframes ya que me resultaba mas sencillo.
+
+Ademas guardamos la info de todos los sensores, no solo la del sensor de temperatura y humedad. 
+*(queda pendiente hacerle modular)*
+
+He añadido al archivo de configuracion nuevas rutas para el resto de sensores.
+
+Se ha ampliado toda la parte de Streaming para crear las tablas y almacenar los datos de los otros sensores, 
+queda pendiente unificar todas las tablas.
+
+1. processSensorData filtra y agrega datos en tiempo real basándose en el campo del sensor especificado.
+2. writeToConsole escribe los resultados en la consola con el modo de salida y la configuración de trigger especificados y devuelve una StreamingQuery.
+3. awaitTermination espera la finalización de una lista de consultas de streaming.
+
+Repito seria de gran utilidad implementar tests unitarios para las funciones processSensorData, writeToConsole y awaitTermination.
+
+
+
+
+
+
+
+
 
 

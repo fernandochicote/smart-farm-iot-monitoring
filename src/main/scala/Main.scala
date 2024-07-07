@@ -1,7 +1,7 @@
 // Importaciones de Spark
-import org.apache.spark.sql.{Dataset, Row, SparkSession}
+import org.apache.spark.sql.{Dataset, Row, SparkSession, DataFrame}
 import org.apache.spark.sql.functions._
-import org.apache.spark.sql.streaming.Trigger
+import org.apache.spark.sql.streaming.{StreamingQuery, Trigger}
 import org.apache.spark.sql.expressions.UserDefinedFunction
 
 
@@ -113,14 +113,14 @@ object Main extends App {
   val spark = SparkSession.builder
     .appName("IoT Farm Monitoring")
     .master("local[*]")
-    .config("spark.sql.streaming.checkpointLocation", "./tmp/checkpoint")
-    .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
-    .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
+    .config("spark.sql.streaming.checkpointLocation", checkpointLocation)
+    .config("spark.sql.extensions", extensions)
+    .config("spark.sql.catalog.spark_catalog", sparkCatalog)
     // Shuffle partitions
-    .config("spark.sql.shuffle.partitions", "10")
+    .config("spark.sql.shuffle.partitions", shufflePartitions)
     .getOrCreate()
 
-  spark.sparkContext.setLogLevel("FATAL")
+  spark.sparkContext.setLogLevel(logLevel)
 
   // Mapeo de sensores a zonas
   private val sensorToZoneMap: Map[SensorId, ZoneId] = Map(
@@ -135,46 +135,78 @@ object Main extends App {
     Sensor9 -> Zone3
   )
 
-  // Leer datos de Kafka para temperatura y humedad
+  // Leer datos de Kafka para todos los sensores
 
-  val temperatureHumidityDF: Dataset[TemperatureHumidityData] = getKafkaStream(temperatureHumidityTopic, spark).flatMap {
 
+  val temperatureHumidityDS: Dataset[TemperatureHumidityData] = getKafkaStream(temperatureHumidityTopic, spark).flatMap {
     case (value, timestamp) =>
       validarDatosSensorTemperatureHumidity(value, timestamp)
-
   }
 
+  val co2DS: Dataset[CO2Data] = getKafkaStream(co2Topic, spark).flatMap {
+    case (value, timestamp) =>
+      validarDatosSensorCO2(value, timestamp)
+  }
 
-  val temperatureHumidityDFWithZone = temperatureHumidityDF.withColumn("zoneId", sensorIdToZoneId(col("sensorId")))
+  val soilMoistureDS: Dataset[SoilMoistureData] = getKafkaStream(soilMoistureTopic, spark).flatMap {
+    case (value, timestamp) =>
+      validarDatosSensorTemperatureHumiditySoilMoisture(value, timestamp)
+  }
 
-  val schema = temperatureHumidityDFWithZone.schema
-  val emptyDF = spark.createDataFrame(spark.sparkContext.emptyRDD[Row], schema)
+  // Asignar zona a cada sensor
 
-  emptyDF.write
+  val temperatureHumidityDFWithZone = temperatureHumidityDS.withColumn("zoneId", sensorIdToZoneId(col("sensorId")))
+  val co2DFWithZone = co2DS.withColumn("zoneId", sensorIdToZoneId(col("sensorId")))
+  val soilMoistureDFWithZone = soilMoistureDS.withColumn("zoneId", sensorIdToZoneId(col("sensorId")))
+
+
+  // Creacion de tablas para cada sensor
+  // TODO: hacerlo modular --> Por un lado funcion para crear tabla, por otro escritura
+
+  val temperatureHumiditySchema = temperatureHumidityDFWithZone.schema
+  val co2Schema = co2DFWithZone.schema
+  val soilMoistureSchema = soilMoistureDFWithZone.schema
+
+  val tHemptyDF = spark.createDataFrame(spark.sparkContext.emptyRDD[Row], temperatureHumiditySchema)
+  val co2emptyDF = spark.createDataFrame(spark.sparkContext.emptyRDD[Row], co2Schema)
+  val sMemptyDF = spark.createDataFrame(spark.sparkContext.emptyRDD[Row], soilMoistureSchema)
+
+
+  tHemptyDF.write
     .format("delta")
-    //.save("./tmp/raw_temperature_humidity_zone")
     .save(getRutaParaTabla(Config.Tablas.RawTemperatureHumidityZone))
 
-
-
-  /*
-  emptyDF.write
-    .format("json")
-    .save("./tmp/temperature_humidity_zone_merge_json")
-*/
-  emptyDF.write
+  tHemptyDF.write
     .format("delta")
     .partitionBy("zoneId", "sensorId")
-    //.save("./tmp/temperature_humidity_zone_merge")
     .save(getRutaParaTabla(Config.Tablas.TemperatureHumidityZoneMerge))
 
+  co2emptyDF.write
+    .format("delta")
+    .save(getRutaParaTabla(Config.Tablas.RawCo2Zone))
 
+  co2emptyDF.write
+    .format("delta")
+    .partitionBy("zoneId", "sensorId")
+    .save(getRutaParaTabla(Config.Tablas.Co2ZoneMerge))
 
+  sMemptyDF.write
+    .format("delta")
+    .save(getRutaParaTabla(Config.Tablas.RawSoilMoistureZone))
+
+  sMemptyDF.write
+    .format("delta")
+    .partitionBy("zoneId", "sensorId")
+    .save(getRutaParaTabla(Config.Tablas.SoilMoistureZoneMerge))
+
+  // Escritura de las tablas de las tablas en streaming
   temperatureHumidityDFWithZone.writeStream
     .format("delta")
     .option("checkpointLocation", getRutaParaTablaChk(Config.Tablas.RawTemperatureHumidityZone))
     .trigger(Trigger.ProcessingTime("5 second"))
     .start(getRutaParaTabla(Config.Tablas.RawTemperatureHumidityZone))
+
+  // Lectura de las tablas de las tablas en streaming
 
   spark.readStream
     .format("delta")
@@ -191,75 +223,55 @@ object Main extends App {
 
   spark.readStream
     .format("delta")
-    .load("./tmp/temperature_humidity_zone_merge")
+    .load(getRutaParaTabla(Config.Tablas.TemperatureHumidityZoneMerge))
     .coalesce(1)
     .writeStream
     .outputMode("append")
     .format("json")
-    //.partitionBy("zoneId", "sensorId")
     .start("./tmp/temperature_humidity_zone_merge_json")
 
+  //TODO: funcion para procesar datos en streaming
 
-  // Procesamiento y agregación de datos en tiempo real (Ejemplo: Promedio de temperatura por minuto)
-  val avgTemperatureDF = temperatureHumidityDFWithZone
-    .filter($"zoneId" =!= "unknown")
-    .withWatermark("timestamp", "1 minute")
-    .groupBy(
-      window($"timestamp".cast("timestamp"), "1 minute"),
-      $"zoneId"
-    )
-    .agg(avg($"temperature").as("avg_temperature"))
+  // Procesamiento y agregación de datos en tiempo real (Ejemplo: Promedio por minuto)
 
-  // Escribir resultados en la consola (puede ser almacenado en otro sistema)
-  val query = avgTemperatureDF.writeStream
-    .outputMode("complete")
-    .format("console")
-    .option("truncate", "false")
-    .trigger(Trigger.ProcessingTime("10 second"))
-    .start()
+  // Función para filtrar y agregar datos en tiempo real
+  def processSensorData(df: DataFrame, sensorField: String, watermarkDuration: String, windowDuration: String): DataFrame = {
+    df.filter($"zoneId" =!= "unknown")
+      .withWatermark("timestamp", watermarkDuration)
+      .groupBy(window($"timestamp".cast("timestamp"), windowDuration), $"zoneId")
+      .agg(avg(col(sensorField)).as(s"avg_$sensorField"))
+  }
+
+  // Procesar y agregar datos de temperatura y humedad
+  val avgTemperatureDF = processSensorData(temperatureHumidityDFWithZone, "temperature", "1 minute", "1 minute")
+  val avgCo2DF = processSensorData(co2DFWithZone, "co2Level", "1 minute", "1 minute")
+  val avgSoilMoistureDF = processSensorData(soilMoistureDFWithZone, "soilMoisture", "1 minute", "1 minute")
+
+  // Función para escribir los resultados en la consola
+  def writeToConsole(df: DataFrame, outputMode: String, format: String, triggerDuration: String, truncate: Boolean = false): StreamingQuery = {
+    df.writeStream
+      .outputMode(outputMode)
+      .format(format)
+      .option("truncate", truncate.toString)
+      .trigger(Trigger.ProcessingTime(triggerDuration))
+      .start()
+  }
+
+  // Escribir resultados en la consola y obtener las consultas
+  val tempQuery = writeToConsole(avgTemperatureDF, "complete", "console", "10 seconds")
+  val co2Query = writeToConsole(avgCo2DF, "complete", "console", "10 seconds")
+  val soilQuery = writeToConsole(avgSoilMoistureDF, "complete", "console", "10 seconds")
 
   // Mostrar los dispositivos que no están mapeados a una zona
-  temperatureHumidityDFWithZone.filter($"zoneId" === "unknown")
-    .writeStream
-    .outputMode("append")
-    .format("console")
-    .option("truncate", "false")
-    .trigger(Trigger.ProcessingTime("20 second"))
-    .start()
+  val unMappedDevicesDF = temperatureHumidityDFWithZone.filter($"zoneId" === "unknown")
+  val unmappedQuery = writeToConsole(unMappedDevicesDF, "append", "console", "20 seconds")
 
-
-
-
-  val co2DF = getKafkaStream(co2Topic, spark).map {
-    case (value, timestamp) =>
-      validarDatosSensorCO2(value, timestamp)
+  // Función para esperar la finalización de las consultas de streaming
+  def awaitTermination(queries: List[StreamingQuery]): Unit = {
+    queries.foreach(_.awaitTermination())
   }
 
-  val avgCo2DF = co2DF
-    .withWatermark("timestamp", "1 minute")
-    .groupBy(
-      window($"timestamp".cast("timestamp"), "1 minute"),
-      $"sensorId"
-    )
-    .agg(avg($"co2Level").as("avg_co2Level"))
-
-  val soilMoistureDF = getKafkaStream(soilMoistureTopic, spark).map {
-    case (value, timestamp) =>
-      // TODO: Qué tal si movemos esto a una función?
-      validarDatosSensorTemperatureHumiditySoilMoisture(value, timestamp)
-  }
-  val avgSolilMoistureDF = soilMoistureDF
-    .withWatermark("timestamp", "1 minute")
-    .groupBy(
-      window($"timestamp".cast("timestamp"), "1 minute"),
-      $"sensorId"
-    )
-    .agg(avg($"soilMoisture").as("avg_soilMoisture"))
-
-
-  // Unificar los datos de los diferentes sensores
-  //val unifiedData = ???
-
-  query.awaitTermination()
+  // Esperar la finalización de todas las consultas
+  awaitTermination(List(tempQuery, co2Query, soilQuery, unmappedQuery))
 
 }
