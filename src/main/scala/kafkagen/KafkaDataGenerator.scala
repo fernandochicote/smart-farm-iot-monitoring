@@ -45,7 +45,7 @@ object KafkaDataGenerator {
   def main(args: Array[String]): Unit = {
     val topics = List("temperature_humidity", "co2", "soil_moisture")
     val unknownSensorInterval = 50
-    val delayBetweenMessages = 500
+    val delayBetweenMessages = 5000
 
     for {
       j <- 1 to 30000
