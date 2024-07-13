@@ -1,67 +1,72 @@
+package main
+
 // Importaciones de Spark
-import org.apache.spark.sql.{Dataset, Row, SparkSession, DataFrame}
-import org.apache.spark.sql.functions._
-import org.apache.spark.sql.streaming.{StreamingQuery, Trigger}
+
+import config.Config
+import config.Config._
+import main.DataValidations.{validarDatosSensorCO2, validarDatosSensorTemperatureHumidity, validarDatosSensorTemperatureHumiditySoilMoisture}
+import main.Main.{CO2Data, SoilMoistureData, TemperatureHumidityData}
+import main.SensorIdEnum._
+import main.ZoneIdEnum._
 import org.apache.spark.sql.expressions.UserDefinedFunction
+import org.apache.spark.sql.functions.{avg, col, udf, window}
+import org.apache.spark.sql.streaming.{StreamingQuery, Trigger}
+import org.apache.spark.sql.{DataFrame, Dataset, Row, SparkSession}
 
 
 // Importaciones estándar de Java y Scala
 import java.sql.Timestamp
 import scala.util.Try
 
-// Importaciones del proyecto
-import config.Config
-import config.Config._
-import DataValidations.{validarDatosSensorCO2, validarDatosSensorTemperatureHumidity, validarDatosSensorTemperatureHumiditySoilMoisture}
-import Main.{CO2Data, SoilMoistureData, TemperatureHumidityData}
-import SensorId._
-import ZoneId._
-
-// Enumeraciones para sensorId
-object SensorId extends Enumeration {
-  type SensorId = Value
-  val Sensor1, Sensor2, Sensor3, Sensor4, Sensor5, Sensor6, Sensor7, Sensor8, Sensor9 = Value
-}
-
-// Enumeraciones para zoneId
-object ZoneId extends Enumeration {
-  type ZoneId = Value
-  val Zone1, Zone2, Zone3 = Value
-}
-
 
 object DataValidations {
 
+  def sensorIdEnumFromString(value: String): Option[SensorId] = {
+    value match {
+      case "sensor1" => Some(Sensor1)
+      case "sensor2" => Some(Sensor2)
+      case "sensor3" => Some(Sensor3)
+      case "sensor4" => Some(Sensor4)
+      case "sensor5" => Some(Sensor5)
+      case "sensor6" => Some(Sensor6)
+      case "sensor7" => Some(Sensor7)
+      case "sensor8" => Some(Sensor8)
+      case "sensor9" => Some(Sensor9)
+      case _ => Some(Unknown)
+    }
+  }
+
   def validarDatosSensorTemperatureHumidity(value: String, timestamp: Timestamp): Option[TemperatureHumidityData] = {
     val parts = value.split(",")
+    val sensorIdInt = sensorIdEnumFromString(parts(0)).get
+
     if (parts.length == 3) {
       for {
-        sensorId <- toSensorId(parts(0))
         temperature <- toDouble(parts(1))
         humidity <- toDouble(parts(2))
-      } yield TemperatureHumidityData(sensorId, temperature, humidity, timestamp)
+      } yield TemperatureHumidityData(sensorIdInt, temperature, humidity, timestamp)
     } else None
   }
 
   def validarDatosSensorTemperatureHumiditySoilMoisture(value: String, timestamp: Timestamp): Option[SoilMoistureData] = {
     val parts = value.split(",")
+    val sensorIdInt = sensorIdEnumFromString(parts(0)).get
     if (parts.length == 3) {
       for {
-        sensorId <- toSensorId(parts(0))
         moisture <- toDouble(parts(1))
         ts <- toTimestamp(parts(2))
-      } yield SoilMoistureData(sensorId, moisture, ts)
+      } yield SoilMoistureData(sensorIdInt, moisture, ts)
     } else None
   }
 
   def validarDatosSensorCO2(value: String, timestamp: Timestamp): Option[CO2Data] = {
     val parts = value.split(",")
+    val sensorIdInt = sensorIdEnumFromString(parts(0)).get
     if (parts.length == 3) {
       for {
-        sensorId <- toSensorId(parts(0))
         co2 <- toDouble(parts(1))
         ts <- toTimestamp(parts(2))
-      } yield CO2Data(sensorId, co2, ts)
+      } yield CO2Data(sensorIdInt, co2, ts)
     } else None
   }
 
@@ -69,15 +74,9 @@ object DataValidations {
 
   private def toTimestamp(value: String): Option[Timestamp] = Try(Timestamp.valueOf(value)).toOption
 
-  private def toSensorId(value: String): Option[SensorId.Value] = Try(SensorId.withName(value)).toOption
-
-
 }
 
 object Main extends App {
-
-  import spark.implicits._
-
 
   // Clase para representar los datos de un sensor de humedad del suelo
   case class SoilMoistureData(sensorId: SensorId, soilMoisture: Double, timestamp: Timestamp)
@@ -90,13 +89,12 @@ object Main extends App {
 
   // UDF para obtener zoneId
   val sensorIdToZoneId: UserDefinedFunction = udf((sensorId: String) => {
-    Try(SensorId.withName(sensorId)).toOption.flatMap(sensorToZoneMap.get).map(_.toString).getOrElse("unknown")
+    Try(SensorIdEnum.withName(sensorId)).toOption.flatMap(sensorToZoneMap.get).map(_.toString).getOrElse("unknown")
   })
 
 
-
   // Devuelve un Dataset con una tupla de (valor, timestamp), donde el campo valor es un string
-  def getKafkaStream(topic: String , spark: SparkSession) = {
+  def getKafkaStream(topic: String, spark: SparkSession) = {
     import spark.implicits._
     spark.readStream
       .format("kafka")
@@ -121,6 +119,8 @@ object Main extends App {
     .getOrCreate()
 
   spark.sparkContext.setLogLevel(logLevel)
+
+  import spark.implicits._
 
   // Mapeo de sensores a zonas
   private val sensorToZoneMap: Map[SensorId, ZoneId] = Map(

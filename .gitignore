@@ -145,3 +145,5 @@ project/plugins/project/
 hs_err_pid*
 
 /.idea/
+/.bsp/
+/tmp/

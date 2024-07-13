@@ -14,7 +14,7 @@ libraryDependencies ++= Seq(
   // Delta Lake
   "io.delta"        %% "delta-spark"           % "3.2.0",
   // ScalaTest
-  "org.scalatest"   %% "scalatest"             % "3.2.18" % Test,
+  "org.scalatest"   %% "scalatest"             % "3.2.19" % Test,
   // Spark Fast Tests
   "com.github.mrpowers" %% "spark-fast-tests"  % "1.3.0" % Test
 )
