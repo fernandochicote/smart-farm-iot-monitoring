@@ -19,24 +19,39 @@ package object main {
         implicit val co2DataEncoder: Encoder[CO2Data] = Encoders.product[CO2Data]
         implicit val optionCo2DataEncoder: Encoder[Option[CO2Data]] = Encoders.kryo[Option[CO2Data]]
 
-    }
+        import scala.reflect.runtime.universe._
 
-    // Superclase para representar los datos comunes de un sensor
+        implicit def sensorDataWithZoneEncoder[T <: SensorData : TypeTag]: Encoder[SensorDataWithZone[T]] = Encoders.product[SensorDataWithZone[T]]    }
 
-    class SensorData(val sensorId: SensorId, timestamp: Timestamp, zoneId: Option[ZoneId] = None){
+    case class SensorDataWithZone[T](data: T, zoneId: String)
+
+    class SensorData(val sensorId: SensorId, val timestamp: Timestamp, val zoneId: Option[ZoneId] = None) {
         def copy(sensorId: SensorId = this.sensorId, timestamp: Timestamp = this.timestamp, zoneId: Option[ZoneId] = this.zoneId): SensorData = {
             new SensorData(sensorId, timestamp, zoneId)
         }
     }
 
-    // Clases específicas para cada tipo de sensor extendiendo desde la superclase SensorData
-    // Creamos ya los encoders para cada una de las clases
-    case class SoilMoistureData(  override val sensorId: SensorId, soilMoisture: Double,   timestamp: Timestamp,   zoneId: Option[ZoneId] = None) extends SensorData(sensorId, timestamp, zoneId)
+    case class SoilMoistureData(
+                                 override val sensorId: SensorId,
+                                 soilMoisture: Double,
+                                 override val timestamp: Timestamp,
+                                 override val zoneId: Option[ZoneId] = None
+                               ) extends SensorData(sensorId, timestamp, zoneId)
 
-    case class TemperatureHumidityData(  override val sensorId: SensorId, temperature: Double, humidity: Double,  timestamp: Timestamp,  zoneId: Option[ZoneId] = None) extends SensorData(sensorId, timestamp, zoneId)
+    case class TemperatureHumidityData(
+                                        override val sensorId: SensorId,
+                                        temperature: Double,
+                                        humidity: Double,
+                                        override val timestamp: Timestamp,
+                                        override val zoneId: Option[ZoneId] = None
+                                      ) extends SensorData(sensorId, timestamp, zoneId)
 
-    case class CO2Data(  override val sensorId: SensorId, co2Level: Double,   timestamp: Timestamp,   zoneId: Option[ZoneId] = None) extends SensorData(sensorId, timestamp, zoneId)
+    case class CO2Data(
+                        override val sensorId: SensorId,
+                        co2Level: Double,
+                        override val timestamp: Timestamp,
+                        override val zoneId: Option[ZoneId] = None
+                      ) extends SensorData(sensorId, timestamp, zoneId)
 }
-
 
 

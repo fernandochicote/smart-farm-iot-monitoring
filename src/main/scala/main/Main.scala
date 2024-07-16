@@ -3,16 +3,20 @@ package main
 import DataValidations.{validarDatosSensorCO2, validarDatosSensorTemperatureHumidity, validarDatosSensorTemperatureHumiditySoilMoisture}
 import config.Config
 import config.Config._
-import main.AppHelperFunctions.{getKafkaStream, sensorIdToZoneId}
+import main.AppHelperFunctions.{deserializarData, getKafkaStream, sensorIdToZoneId, sensorToZoneMap}
 import main.SensorIdEnum._
 import main.ZoneIdEnum._
 import org.apache.spark.sql.expressions.UserDefinedFunction
 import org.apache.spark.sql.functions.{avg, col, udf, window}
 import org.apache.spark.sql.streaming.{StreamingQuery, Trigger}
-import org.apache.spark.sql.{DataFrame, Dataset, Encoder, Row, SparkSession}
+import org.apache.spark.sql.{DataFrame, Dataset, Encoder, Encoders, Row, SparkSession}
 import utils.util.PrintUtils
 import DomainEncoders._
+import com.esotericsoftware.kryo.Kryo
+import scala.reflect.ClassTag
+
 import java.sql.Timestamp
+import scala.reflect.ClassTag
 import scala.util.Try
 
 object AppHelperFunctions {
@@ -44,8 +48,35 @@ object AppHelperFunctions {
       .selectExpr("CAST(value AS STRING)", "CAST(timestamp AS TIMESTAMP)")
       .as[(String, Timestamp)]
   }
+
+  // Función genérica para deserializar datos binarios desde Kafka utilizando Kryo
+  def deserializarData[T](bytes: Array[Byte])(implicit encoder: Encoder[T], ct: ClassTag[T]): Option[T] = {
+    val kryo = new Kryo()
+    new MyKryoRegistrator().registerClasses(kryo)
+    val input = new com.esotericsoftware.kryo.io.Input(bytes)
+    try {
+      val data = kryo.readClassAndObject(input).asInstanceOf[T]
+      Option(data)
+    } catch {
+      case _: Exception => None
+    } finally {
+      input.close()
+    }
+  }
+
 }
 
+import com.esotericsoftware.kryo.Kryo
+import org.apache.spark.serializer.KryoRegistrator
+
+class MyKryoRegistrator extends KryoRegistrator {
+  override def registerClasses(kryo: Kryo): Unit = {
+    kryo.register(classOf[main.SoilMoistureData])
+    kryo.register(classOf[main.CO2Data])
+    kryo.register(classOf[main.TemperatureHumidityData])
+    kryo.register(classOf[main.SensorData])
+  }
+}
 object Main extends App with PrintUtils {
 
   printBoldMessage("Starting IoT Farm Monitoring")
@@ -57,6 +88,8 @@ object Main extends App with PrintUtils {
     .config("spark.sql.extensions", extensions)
     .config("spark.sql.catalog.spark_catalog", sparkCatalog)
     .config("spark.sql.shuffle.partitions", shufflePartitions)
+    .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+    .config("spark.kryo.registrator", "main.MyKryoRegistrator")
     .getOrCreate()
 
   spark.sparkContext.setLogLevel(logLevel)
@@ -82,41 +115,54 @@ object Main extends App with PrintUtils {
       validarDatosSensorTemperatureHumiditySoilMoisture(value, timestamp)
   }
 
+  // scala.reflect.ClassTag
   // Filtrar None y extraer valores de Some, asignar zona a cada sensor y convertir a DataFrame
-  def assignZoneAndConvertToDF[T <: SensorData](ds: Dataset[Option[T]])(implicit encoder: Encoder[T]): DataFrame = {
-    ds.flatMap(_.toSeq)
-      .map(data => data.copy(zoneId = AppHelperFunctions.sensorToZoneMap.get(data.sensorId)))
-      .toDF()
-  }
+def assignZoneAndConvertToDF[T <: SensorData : Encoder : scala.reflect.ClassTag](ds: Dataset[Option[T]])(implicit encoder: Encoder[SensorDataWithZone[T]], ct: ClassTag[T]): DataFrame = {
+  import ds.sparkSession.implicits._
+  ds.flatMap(_.map(data => SensorDataWithZone(data, "someZoneId"))).toDF()
+}
 
-
+  implicit val sensorDataWithZoneEncoderTH: Encoder[SensorDataWithZone[TemperatureHumidityData]] = Encoders.product[SensorDataWithZone[TemperatureHumidityData]]
   val temperatureHumidityDFWithZone = assignZoneAndConvertToDF(temperatureHumidityDS)
-  val co2DFWithZone = assignZoneAndConvertToDF(co2DS)(co2DataEncoder)
-  val soilMoistureDFWithZone = assignZoneAndConvertToDF(soilMoistureDS)(soilMoistureDataEncoder)
+
+  implicit val sensorDataWithZoneEncoderCO2: Encoder[SensorDataWithZone[CO2Data]] = Encoders.product[SensorDataWithZone[CO2Data]]
+  val co2DFWithZone = assignZoneAndConvertToDF(co2DS)
+
+  implicit val sensorDataWithZoneEncoderSM: Encoder[SensorDataWithZone[SoilMoistureData]] = Encoders.product[SensorDataWithZone[SoilMoistureData]]
+  val soilMoistureDFWithZone = assignZoneAndConvertToDF(soilMoistureDS)
+
+
+  // Seleccionar datos y zona
+  val temperatureHumidityDFWithZoneFinal = temperatureHumidityDFWithZone.select($"data.*")
+  val co2DFWithZoneFinal = co2DFWithZone.select($"data.*")
+  val soilMoistureDFWithZoneFinal = soilMoistureDFWithZone.select($"data.*")
 
   // Creación de tablas para cada sensor
-  val temperatureHumiditySchema = temperatureHumidityDFWithZone.schema
-  val co2Schema = co2DFWithZone.schema
-  val soilMoistureSchema = soilMoistureDFWithZone.schema
+  val temperatureHumiditySchema = temperatureHumidityDFWithZoneFinal.schema
+  val co2Schema = co2DFWithZoneFinal.schema
+  val soilMoistureSchema = soilMoistureDFWithZoneFinal.schema
 
   val tHemptyDF: DataFrame = spark.createDataFrame(spark.sparkContext.emptyRDD[Row], temperatureHumiditySchema)
   val co2emptyDF: DataFrame = spark.createDataFrame(spark.sparkContext.emptyRDD[Row], co2Schema)
   val sMemptyDF: DataFrame = spark.createDataFrame(spark.sparkContext.emptyRDD[Row], soilMoistureSchema)
 
+  //tHemptyDF.printSchema()
   tHemptyDF.write
     .mode("overwrite")
     .format("delta")
     .save(getRutaParaTabla(Config.Tablas.RawTemperatureHumidityZone))
 
   // Fernando: Si te fijas como tu dataset es un Dataset[Option[TemperatureHumidityData]],
-  tHemptyDF.toDF().printSchema()
+  //tHemptyDF.map( row => deserializarData[TemperatureHumidityData](row.toString().getBytes)).toDF().printSchema()
 
+  tHemptyDF.toDF().printSchema()
   tHemptyDF.toDF().write
     .mode("overwrite")
     .format("delta")
     .partitionBy("zoneId", "sensorId")
     .save(getRutaParaTabla(Config.Tablas.TemperatureHumidityZoneMerge))
 
+  co2emptyDF.printSchema()
   co2emptyDF.write
     .mode("overwrite")
     .format("delta")
@@ -128,16 +174,18 @@ object Main extends App with PrintUtils {
     .partitionBy("zoneId", "sensorId")
     .save(getRutaParaTabla(Config.Tablas.Co2ZoneMerge))
 
+  sMemptyDF.printSchema()
   sMemptyDF.write
     .format("delta")
     .save(getRutaParaTabla(Config.Tablas.RawSoilMoistureZone))
 
-  sMemptyDF.write
+   sMemptyDF.write
     .format("delta")
     .partitionBy("zoneId", "sensorId")
     .save(getRutaParaTabla(Config.Tablas.SoilMoistureZoneMerge))
 
   // Escritura de las tablas de las tablas en streaming
+  temperatureHumidityDFWithZone.printSchema()
   temperatureHumidityDFWithZone.writeStream
     .format("delta")
     .option("checkpointLocation", getRutaParaTablaChk(Config.Tablas.RawTemperatureHumidityZone))
@@ -167,13 +215,21 @@ object Main extends App with PrintUtils {
     .format("json")
     .start("./tmp/temperature_humidity_zone_merge_json")
 
+  println("temperatureHumidityDFWithZone: schema")
+  temperatureHumidityDFWithZone.printSchema()
+  println("co2DFWithZone: schema  ")
+  co2DFWithZone.printSchema()
+  println("soilMoistureDFWithZone: schema")
+  soilMoistureDFWithZone.printSchema()
+
+
   // Procesar y agregar datos de temperatura y humedad
   def processSensorData(df: DataFrame, sensorField: String, watermarkDuration: String, windowDuration: String): DataFrame = {
-    df.filter($"zoneId" =!= "unknown")
+    df.select($"data.timestamp", $"data.zoneId", col(s"data.$sensorField"))
+      .filter($"zoneId" =!= "unknown")
       .withWatermark("timestamp", watermarkDuration)
-      .groupBy(window($"timestamp".cast("timestamp"), windowDuration), $"zoneId")
+      .groupBy(window($"timestamp", windowDuration), $"zoneId")
       .agg(avg(col(sensorField)).as(s"avg_$sensorField"))
-      .toDF()
   }
 
   val avgTemperatureDF = processSensorData(temperatureHumidityDFWithZone, "temperature", "1 minute", "1 minute")
