@@ -4,6 +4,7 @@ package main
 import DataValidations.{validarDatosSensorCO2, validarDatosSensorTemperatureHumidity, validarDatosSensorTemperatureHumiditySoilMoisture}
 import config.Config
 import config.Config._
+import main.AppHelperFunctions.{getKafkaStream, sensorIdToZoneId}
 import main.SensorIdEnum._
 import main.ZoneIdEnum._
 import org.apache.spark.sql.expressions.UserDefinedFunction
@@ -14,44 +15,7 @@ import org.apache.spark.sql.{DataFrame, Dataset, Row, SparkSession}
 import java.sql.Timestamp
 import scala.util.Try
 
-
-object Main extends App {
-
-
-  // UDF para obtener zoneId
-  val sensorIdToZoneId: UserDefinedFunction = udf((sensorId: String) => {
-    Try(SensorIdEnum.withName(sensorId)).toOption.flatMap(sensorToZoneMap.get).map(_.toString).getOrElse("unknown")
-  })
-
-
-  // Devuelve un Dataset con una tupla de (valor, timestamp), donde el campo valor es un string
-  def getKafkaStream(topic: String, spark: SparkSession) = {
-    import spark.implicits._
-    spark.readStream
-      .format("kafka")
-      .option("kafka.bootstrap.servers", kafkaBootstrapServers)
-      .option("subscribe", topic)
-      .option("startingOffsets", "latest")
-      .load()
-      .selectExpr("CAST(value AS STRING)", "CAST(timestamp AS TIMESTAMP)")
-      .as[(String, Timestamp)]
-  }
-
-
-  // Configuración de Spark Session
-  val spark = SparkSession.builder
-    .appName("IoT Farm Monitoring")
-    .master("local[*]")
-    .config("spark.sql.streaming.checkpointLocation", checkpointLocation)
-    .config("spark.sql.extensions", extensions)
-    .config("spark.sql.catalog.spark_catalog", sparkCatalog)
-    // Shuffle partitions
-    .config("spark.sql.shuffle.partitions", shufflePartitions)
-    .getOrCreate()
-
-  spark.sparkContext.setLogLevel(logLevel)
-
-  import spark.implicits._
+object AppHelperFunctions {
 
   // Mapeo de sensores a zonas
   private val sensorToZoneMap: Map[SensorId, ZoneId] = Map(
@@ -66,19 +30,58 @@ object Main extends App {
     Sensor9 -> Zone3
   )
 
+  // UDF para obtener zoneId
+  val sensorIdToZoneId: UserDefinedFunction = udf((sensorId: String) => {
+    Try(SensorIdEnum.withName(sensorId)).toOption.flatMap(sensorToZoneMap.get).map(_.toString).getOrElse("unknown")
+  })
+
+  // Devuelve un Dataset con una tupla de (valor, timestamp), donde el campo valor es un string
+  def getKafkaStream(topic: String)(implicit spark: SparkSession): Dataset[(String, Timestamp)] = {
+    import spark.implicits._
+    spark.readStream
+      .format("kafka")
+      .option("kafka.bootstrap.servers", kafkaBootstrapServers)
+      .option("subscribe", topic)
+      .option("startingOffsets", "latest")
+      .load()
+      .selectExpr("CAST(value AS STRING)", "CAST(timestamp AS TIMESTAMP)")
+      .as[(String, Timestamp)]
+  }
+}
+
+object Main extends App {
+
+
+  // Configuración de Spark Session
+  implicit val spark: SparkSession = SparkSession.builder
+    .appName("IoT Farm Monitoring")
+    .master("local[*]")
+    .config("spark.sql.streaming.checkpointLocation", checkpointLocation)
+    .config("spark.sql.extensions", extensions)
+    .config("spark.sql.catalog.spark_catalog", sparkCatalog)
+    // Shuffle partitions
+    .config("spark.sql.shuffle.partitions", shufflePartitions)
+    .getOrCreate()
+
+  spark.sparkContext.setLogLevel(logLevel)
+
+  import spark.implicits._
+
+
+
   // Leer datos de Kafka para todos los sensores
 
-   val temperatureHumidityDS: Dataset[TemperatureHumidityData] = getKafkaStream(temperatureHumidityTopic, spark).flatMap {
+   val temperatureHumidityDS: Dataset[TemperatureHumidityData] = getKafkaStream(temperatureHumidityTopic).flatMap {
     case (value, timestamp) =>
       validarDatosSensorTemperatureHumidity(value, timestamp)
   }
 
-  val co2DS: Dataset[CO2Data] = getKafkaStream(co2Topic, spark).flatMap {
+  val co2DS: Dataset[CO2Data] = getKafkaStream(co2Topic).flatMap {
     case (value, timestamp) =>
       validarDatosSensorCO2(value, timestamp)
   }
 
-  val soilMoistureDS: Dataset[SoilMoistureData] = getKafkaStream(soilMoistureTopic, spark).flatMap {
+  val soilMoistureDS: Dataset[SoilMoistureData] = getKafkaStream(soilMoistureTopic).flatMap {
     case (value, timestamp) =>
       validarDatosSensorTemperatureHumiditySoilMoisture(value, timestamp)
   }
@@ -203,5 +206,6 @@ object Main extends App {
 
   // Esperar la finalización de todas las consultas
   awaitTermination(List(tempQuery, co2Query, soilQuery, unmappedQuery))
+  // También puedes hacer:   spark.streams.awaitAnyTermination()
 
 }
