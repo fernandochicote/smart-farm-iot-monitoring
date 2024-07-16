@@ -9,12 +9,12 @@ lazy val root = (project in file("."))
 
 // Importaciones necesarias para trabajar con Spark y Kafka
 libraryDependencies ++= Seq(
-  "org.apache.spark" %% "spark-sql"            % Versions.spark,
-  "org.apache.spark" %% "spark-sql-kafka-0-10" % Versions.spark,
+  "org.apache.spark" %% "spark-sql"            % "3.5.1",
+  "org.apache.spark" %% "spark-sql-kafka-0-10" % "3.5.1",
   // Delta Lake
-  "io.delta"        %% "delta-spark"           % Versions.delta,
+  "io.delta"        %% "delta-spark"           % "3.2.0",
   // ScalaTest
-  "org.scalatest"   %% "scalatest"             % Versions.scalaTest % Test,
+  "org.scalatest"   %% "scalatest"             % "3.2.19" % Test,
   // Spark Fast Tests
-  "com.github.mrpowers" %% "spark-fast-tests"  % Versions.sparkFastTests % Test
+  "com.github.mrpowers" %% "spark-fast-tests"  % "1.3.0" % Test
 )
