@@ -1,11 +1,9 @@
 package main
 
 // Importaciones de Spark
-
+import DataValidations.{validarDatosSensorCO2, validarDatosSensorTemperatureHumidity, validarDatosSensorTemperatureHumiditySoilMoisture}
 import config.Config
 import config.Config._
-import main.DataValidations.{validarDatosSensorCO2, validarDatosSensorTemperatureHumidity, validarDatosSensorTemperatureHumiditySoilMoisture}
-import main.Main.{CO2Data, SoilMoistureData, TemperatureHumidityData}
 import main.SensorIdEnum._
 import main.ZoneIdEnum._
 import org.apache.spark.sql.expressions.UserDefinedFunction
@@ -13,79 +11,12 @@ import org.apache.spark.sql.functions.{avg, col, udf, window}
 import org.apache.spark.sql.streaming.{StreamingQuery, Trigger}
 import org.apache.spark.sql.{DataFrame, Dataset, Row, SparkSession}
 
-
-// Importaciones estándar de Java y Scala
 import java.sql.Timestamp
 import scala.util.Try
 
 
-object DataValidations {
-
-  def sensorIdEnumFromString(value: String): Option[SensorId] = {
-    value match {
-      case "sensor1" => Some(Sensor1)
-      case "sensor2" => Some(Sensor2)
-      case "sensor3" => Some(Sensor3)
-      case "sensor4" => Some(Sensor4)
-      case "sensor5" => Some(Sensor5)
-      case "sensor6" => Some(Sensor6)
-      case "sensor7" => Some(Sensor7)
-      case "sensor8" => Some(Sensor8)
-      case "sensor9" => Some(Sensor9)
-      case _ => Some(Unknown)
-    }
-  }
-
-  def validarDatosSensorTemperatureHumidity(value: String, timestamp: Timestamp): Option[TemperatureHumidityData] = {
-    val parts = value.split(",")
-    val sensorIdInt = sensorIdEnumFromString(parts(0)).get
-
-    if (parts.length == 3) {
-      for {
-        temperature <- toDouble(parts(1))
-        humidity <- toDouble(parts(2))
-      } yield TemperatureHumidityData(sensorIdInt, temperature, humidity, timestamp)
-    } else None
-  }
-
-  def validarDatosSensorTemperatureHumiditySoilMoisture(value: String, timestamp: Timestamp): Option[SoilMoistureData] = {
-    val parts = value.split(",")
-    val sensorIdInt = sensorIdEnumFromString(parts(0)).get
-    if (parts.length == 3) {
-      for {
-        moisture <- toDouble(parts(1))
-        ts <- toTimestamp(parts(2))
-      } yield SoilMoistureData(sensorIdInt, moisture, ts)
-    } else None
-  }
-
-  def validarDatosSensorCO2(value: String, timestamp: Timestamp): Option[CO2Data] = {
-    val parts = value.split(",")
-    val sensorIdInt = sensorIdEnumFromString(parts(0)).get
-    if (parts.length == 3) {
-      for {
-        co2 <- toDouble(parts(1))
-        ts <- toTimestamp(parts(2))
-      } yield CO2Data(sensorIdInt, co2, ts)
-    } else None
-  }
-
-  private def toDouble(value: String): Option[Double] = Try(value.toDouble).toOption
-
-  private def toTimestamp(value: String): Option[Timestamp] = Try(Timestamp.valueOf(value)).toOption
-
-}
-
 object Main extends App {
 
-  // Clase para representar los datos de un sensor de humedad del suelo
-  case class SoilMoistureData(sensorId: SensorId, soilMoisture: Double, timestamp: Timestamp)
-
-  // Clase para representar los datos de un sensor de temperatura y humedad
-  case class TemperatureHumidityData(sensorId: SensorId, temperature: Double, humidity: Double, timestamp: Timestamp, zoneId: Option[ZoneId] = None)
-
-  // Clase para representar los datos de un sensor de nivel de CO2
-  case class CO2Data(sensorId: SensorId, co2Level: Double, timestamp: Timestamp, zoneId: Option[ZoneId] = None)
 
   // UDF para obtener zoneId
   val sensorIdToZoneId: UserDefinedFunction = udf((sensorId: String) => {
@@ -137,8 +68,7 @@ object Main extends App {
 
   // Leer datos de Kafka para todos los sensores
 
-
-  val temperatureHumidityDS: Dataset[TemperatureHumidityData] = getKafkaStream(temperatureHumidityTopic, spark).flatMap {
+   val temperatureHumidityDS: Dataset[TemperatureHumidityData] = getKafkaStream(temperatureHumidityTopic, spark).flatMap {
     case (value, timestamp) =>
       validarDatosSensorTemperatureHumidity(value, timestamp)
   }
