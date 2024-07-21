@@ -1,0 +1,85 @@
+{
+  "zonas": [
+    {
+      "id": 1,
+      "nombre": "Zona1",
+      "sensores": [
+        {
+          "id": 1,
+          "nombre": "Sensor1",
+          "latitud": 40.416775,
+          "longitud": -3.703790,
+          "tipo": "TemperatureHumidity"
+        },
+        {
+          "id": 2,
+          "nombre": "Sensor2",
+          "latitud": 40.416775,
+          "longitud": -3.703790,
+          "tipo": "TemperatureHumidity"
+        },
+        {
+          "id": 3,
+          "nombre": "Sensor3",
+          "latitud": 40.416775,
+          "longitud": -3.703790,
+          "tipo": "TemperatureHumidity"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "nombre": "Zona2",
+      "sensores": [
+        {
+          "id": 4,
+          "nombre": "Sensor4",
+          "latitud": 40.416775,
+          "longitud": -3.703790,
+          "tipo": "TemperatureHumidity"
+        },
+        {
+          "id": 5,
+          "nombre": "Sensor5",
+          "latitud": 40.416775,
+          "longitud": -3.703790,
+          "tipo": "TemperatureHumidity"
+        },
+        {
+          "id": 6,
+          "nombre": "Sensor6",
+          "latitud": 40.416775,
+          "longitud": -3.703790,
+          "tipo": "TemperatureHumidity"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "nombre": "Zona3",
+      "sensores": [
+        {
+          "id": 7,
+          "nombre": "Sensor7",
+          "latitud": 40.416775,
+          "longitud": -3.703790,
+          "tipo": "TemperatureHumidity"
+        },
+        {
+          "id": 8,
+          "nombre": "Sensor8",
+          "latitud": 40.416775,
+          "longitud": -3.703790,
+          "tipo": "TemperatureHumidity"
+        },
+        {
+          "id": 9,
+          "nombre": "Sensor9",
+          "latitud": 40.416775,
+          "longitud": -3.703790,
+          "tipo": "TemperatureHumidity"
+        }
+      ]
+    }
+  ]
+}

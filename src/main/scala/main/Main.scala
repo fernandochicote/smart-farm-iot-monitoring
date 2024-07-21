@@ -1,16 +1,14 @@
 package main
 
-// Importaciones de Spark
+// Importaciones de Spark y configuración
 import config.Config
 import config.Config._
-import main.DataValidations.{validarDatosSensorCO2, validarDatosSensorTemperatureHumidity, validarDatosSensorTemperatureHumiditySoilMoisture}
-import main.Main.{CO2Data, SensorData, SoilMoistureData, TemperatureHumidityData}
+import main.DataValidations.validarDatosSensorTemperatureHumidity
+import main.Main.TemperatureHumidityData
 import main.SensorIdEnum._
-import main.ZoneIdEnum._
-import org.apache.spark.sql.expressions.UserDefinedFunction
-import org.apache.spark.sql.functions.{col, lit, struct, udf}
-import org.apache.spark.sql.streaming.{StreamingQuery, Trigger}
-import org.apache.spark.sql.{DataFrame, Dataset, Row, SparkSession}
+import org.apache.spark.sql.functions.{col, explode, broadcast, window, avg}
+import org.apache.spark.sql.{Dataset, SparkSession, DataFrame}
+import org.apache.spark.util.LongAccumulator
 
 // Importaciones estándar de Java y Scala
 import java.sql.Timestamp
@@ -18,6 +16,7 @@ import scala.util.Try
 
 object DataValidations {
 
+  // Función para convertir un String a un SensorId
   def sensorIdEnumFromString(value: String): Option[SensorId] = {
     value match {
       case "sensor1" => Some(Sensor1)
@@ -33,65 +32,91 @@ object DataValidations {
     }
   }
 
-  def validarDatosSensorTemperatureHumidity(value: String, timestamp: Timestamp): Option[TemperatureHumidityData] = {
+  // Validar datos de temperatura y humedad
+  def validarDatosSensorTemperatureHumidity(value: String, timestamp: Timestamp, errorCounter: LongAccumulator): Option[TemperatureHumidityData] = {
     val parts = value.split(",")
-    val sensorIdInt = sensorIdEnumFromString(parts(0)).get
+    val sensorIdInt = sensorIdEnumFromString(parts(0)).getOrElse(Unknown)
 
-    if (parts.length == 4) {  // Asegúrate de que el número de partes coincida con el formato del mensaje
+    // Contar el error solo una vez por cada registro
+    if (sensorIdInt == Unknown) {
+      errorCounter.add(1)
+      None
+    } else if (parts.length == 4) {  // Asegúrate de que el número de partes coincida con el formato del mensaje
       for {
         temperature <- toDouble(parts(1))
         humidity <- toDouble(parts(2))
       } yield TemperatureHumidityData(sensorIdInt, temperature, humidity, timestamp)
-    } else None
+    } else {
+      None
+    }
   }
 
-  def validarDatosSensorTemperatureHumiditySoilMoisture(value: String, timestamp: Timestamp): Option[SoilMoistureData] = {
-    val parts = value.split(",")
-    val sensorIdInt = sensorIdEnumFromString(parts(0)).get
-    if (parts.length == 3) {
-      for {
-        moisture <- toDouble(parts(1))
-      } yield SoilMoistureData(sensorIdInt, moisture, timestamp)
-    } else None
-  }
-
-  def validarDatosSensorCO2(value: String, timestamp: Timestamp): Option[CO2Data] = {
-    val parts = value.split(",")
-    val sensorIdInt = sensorIdEnumFromString(parts(0)).get
-    if (parts.length == 3) {
-      for {
-        co2 <- toDouble(parts(1))
-      } yield CO2Data(sensorIdInt, co2, timestamp)
-    } else None
-  }
-
+  // Función auxiliar para convertir String a Double
   private def toDouble(value: String): Option[Double] = Try(value.toDouble).toOption
 
+  // Función auxiliar para convertir String a Timestamp
   private def toTimestamp(value: String): Option[Timestamp] = Try(Timestamp.valueOf(value)).toOption
 
 }
 
 object Main extends App {
 
-  // Clase para representar los datos de un sensor de humedad del suelo
-  case class SoilMoistureData(sensorId: SensorId, soilMoisture: Double, timestamp: Timestamp)
-
   // Clase para representar los datos de un sensor de temperatura y humedad
-  case class TemperatureHumidityData(sensorId: SensorId, temperature: Double, humidity: Double, timestamp: Timestamp, zoneId: Option[ZoneId] = None)
-
-  // Clase para representar los datos de un sensor de nivel de CO2
-  case class CO2Data(sensorId: SensorId, co2Level: Double, timestamp: Timestamp, zoneId: Option[ZoneId] = None)
+  case class TemperatureHumidityData(sensorId: SensorId, temperature: Double, humidity: Double, timestamp: Timestamp)
 
   // Clase para representar todos los datos de los sensores
-  case class SensorData(sensorId: SensorId, timestamp: Timestamp, zoneId: Option[ZoneId], sensorType: String, temperature: Option[Double], humidity: Option[Double], co2Level: Option[Double], soilMoisture: Option[Double])
+  case class SensorData(sensorId: SensorId, timestamp: Timestamp, temperature: Option[Double], humidity: Option[Double])
 
-  // UDF para obtener zoneId
-  val sensorIdToZoneId: UserDefinedFunction = udf((sensorId: String) => {
-    Try(SensorIdEnum.withName(sensorId)).toOption.flatMap(sensorToZoneMap.get).map(_.toString).getOrElse("unknown")
-  })
+  // Configuración de Spark Session
+  val spark = SparkSession.builder
+    .appName("IoT Farm Monitoring")
+    .master("local[*]")
+    .config("spark.sql.streaming.checkpointLocation", checkpointLocation)
+    .config("spark.sql.extensions", extensions)
+    .config("spark.sql.catalog.spark_catalog", sparkCatalog)
+    .config("spark.sql.shuffle.partitions", shufflePartitions)
+    .getOrCreate()
 
-  // Devuelve un Dataset con una tupla de (valor, timestamp), donde el campo valor es un string
-  def getKafkaStream(topic: String, spark: SparkSession) = {
+  spark.sparkContext.setLogLevel(logLevel)
+
+  import spark.implicits._
+
+  // Crear un acumulador para contar errores
+  val errorCounter = spark.sparkContext.longAccumulator("ErrorCounter")
+
+  // Leer la tabla estática de "zonas" desde un archivo JSON
+  val zonasDF = spark.read
+    .option("multiline", "true")
+    .json(zonesJson)
+
+  // Verificar que se han leído las zonas correctamente
+  println("Zonas DF:")
+  zonasDF.show(false)
+
+  // Explode de las zonas y sensores para crear una tabla relacional
+  val zonasExplodedDF = zonasDF
+    .withColumn("zona", explode(col("zonas")))
+    .select(
+      col("zona.id").alias("zoneCode"),
+      col("zona.nombre").alias("zoneId"),
+      explode(col("zona.sensores")).alias("sensor")
+    )
+    .select(
+      col("zoneCode"),
+      col("zoneId"),
+      col("sensor.id").alias("sensorCode"),
+      col("sensor.nombre").alias("sensorId"),
+      col("sensor.latitud").alias("sensorLatitude"),
+      col("sensor.longitud").alias("sensorLongitude"),
+      col("sensor.tipo").alias("sensorType")
+    )
+
+  // Verificar que se ha hecho el explode correctamente
+  println("Zonas Exploded DF:")
+  zonasExplodedDF.show(false)
+
+  // Función para devolver un Dataset con una tupla de (valor, timestamp) desde Kafka
+  def getKafkaStream(topic: String, spark: SparkSession): Dataset[(String, Timestamp)] = {
     import spark.implicits._
     spark.readStream
       .format("kafka")
@@ -103,65 +128,71 @@ object Main extends App {
       .as[(String, Timestamp)]
   }
 
-  // Configuración de Spark Session
-  val spark = SparkSession.builder
-    .appName("IoT Farm Monitoring")
-    .master("local[*]")
-    .config("spark.sql.streaming.checkpointLocation", checkpointLocation)
-    .config("spark.sql.extensions", extensions)
-    .config("spark.sql.catalog.spark_catalog", sparkCatalog)
-    // Shuffle partitions
-    .config("spark.sql.shuffle.partitions", shufflePartitions)
-    .getOrCreate()
-
-  spark.sparkContext.setLogLevel(logLevel)
-
-  import spark.implicits._
-
-  // Mapeo de sensores a zonas
-  private val sensorToZoneMap: Map[SensorId, ZoneId] = Map(
-    Sensor1 -> Zone1,
-    Sensor2 -> Zone1,
-    Sensor3 -> Zone1,
-    Sensor4 -> Zone2,
-    Sensor5 -> Zone2,
-    Sensor6 -> Zone2,
-    Sensor7 -> Zone3,
-    Sensor8 -> Zone3,
-    Sensor9 -> Zone3
-  )
-
-  // Leer datos de Kafka para todos los sensores
+  // Leer datos de Kafka para sensores de temperatura y humedad
   val temperatureHumidityDS: Dataset[SensorData] = getKafkaStream(temperatureHumidityTopic, spark).flatMap {
     case (value, timestamp) =>
-      validarDatosSensorTemperatureHumidity(value, timestamp).map(th =>
-        SensorData(th.sensorId, th.timestamp, sensorToZoneMap.get(th.sensorId), "TemperatureHumidity", Some(th.temperature), Some(th.humidity), None, None))
+      println(s"Raw data from Kafka: $value at $timestamp") // Depuración
+      validarDatosSensorTemperatureHumidity(value, timestamp, errorCounter).map(th =>
+        SensorData(th.sensorId, th.timestamp, Some(th.temperature), Some(th.humidity)))
   }
 
-  val co2DS: Dataset[SensorData] = getKafkaStream(co2Topic, spark).flatMap {
-    case (value, timestamp) =>
-      validarDatosSensorCO2(value, timestamp).map(co2 =>
-        SensorData(co2.sensorId, co2.timestamp, sensorToZoneMap.get(co2.sensorId), "CO2", None, None, Some(co2.co2Level), None))
+  // Añadir watermark para permitir agregaciones con datos tardíos hasta 5 minutos
+  val withWatermarkDS = temperatureHumidityDS
+    .withWatermark("timestamp", "5 minutes")
+
+  // Verificar que se han leído los datos del sensor correctamente
+  println("Temperature Humidity DS:")
+  withWatermarkDS.printSchema()
+
+  // Función para realizar el broadcast join y enriquecer los datos
+  def enrichData(sensorDataDS: Dataset[SensorData], zonesDF: DataFrame): DataFrame = {
+    sensorDataDS.join(
+      broadcast(zonesDF),
+      sensorDataDS("sensorId") === zonesDF("sensorId"),
+      "left"
+    ).select(
+      sensorDataDS("sensorId"),
+      sensorDataDS("timestamp"),
+      sensorDataDS("temperature"),
+      sensorDataDS("humidity"),
+      col("zoneCode"),
+      col("zoneId"),
+      col("sensorLatitude"),
+      col("sensorLongitude"),
+      col("sensorType")
+    )
   }
 
-  val soilMoistureDS: Dataset[SensorData] = getKafkaStream(soilMoistureTopic, spark).flatMap {
-    case (value, timestamp) =>
-      validarDatosSensorTemperatureHumiditySoilMoisture(value, timestamp).map(sm =>
-        SensorData(sm.sensorId, sm.timestamp, sensorToZoneMap.get(sm.sensorId), "SoilMoisture", None, None, None, Some(sm.soilMoisture)))
-  }
-
-  // Unir todos los datasets en un solo dataframe
-  val unifiedDF = temperatureHumidityDS
-    .unionByName(co2DS)
-    .unionByName(soilMoistureDS)
-
-  // Mostrar en consola los datos que llegan
-  val unifiedQuery = unifiedDF.writeStream
+  // Definir el stream de consulta
+  val query = withWatermarkDS.writeStream
     .outputMode("append")
     .format("console")
+    .option("truncate", "false")
+    .foreachBatch { (batchDS: Dataset[SensorData], batchId: Long) =>
+      println(s"=== Batch $batchId ===")
+      println("Datos leídos en el batch:")
+      batchDS.show(false)
+
+      val enrichedBatchDF = enrichData(batchDS, zonasExplodedDF)
+      println("Query del join en el batch:")
+      enrichedBatchDF.show(false)
+
+      val avgTempDF = enrichedBatchDF
+        .groupBy(
+          window(col("timestamp"), "1 hour"),
+          col("sensorId")
+        )
+        .agg(avg("temperature").alias("avg_temperature"))
+        .select("window", "sensorId", "avg_temperature")
+
+      println("Datos después de la agregación:")
+      avgTempDF.show(false)
+
+      println(s"Total de errores detectados hasta el momento: ${errorCounter.value}")
+    }
     .start()
 
   // Esperar la finalización de la consulta
-  unifiedQuery.awaitTermination()
+  query.awaitTermination()
 }
 
