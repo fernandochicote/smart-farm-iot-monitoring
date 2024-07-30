@@ -2,8 +2,9 @@ package main
 
 // Importaciones de Spark y configuración
 import config.Config._
+import domain.Domain.{SensorData, TemperatureHumidityData}
 import main.DataValidations.validarDatosSensorTemperatureHumidity
-import main.Main.TemperatureHumidityData
+import main.HelperFunctions.enrichData
 import main.SensorIdEnum._
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.{DataFrame, Dataset, SparkSession}
@@ -58,16 +59,47 @@ object DataValidations {
 
 }
 
+object HelperFunctions{
+
+  // Función para devolver un Dataset con una tupla de (valor, timestamp) desde Kafka
+  def getKafkaStream(topic: String)(implicit spark: SparkSession): Dataset[(String, Timestamp)] = {
+    import spark.implicits._
+    spark.readStream
+      .format("kafka")
+      .option("kafka.bootstrap.servers", kafkaBootstrapServers)
+      .option("subscribe", topic)
+      .option("startingOffsets", "latest")
+      .load()
+      .selectExpr("CAST(value AS STRING)", "CAST(timestamp AS TIMESTAMP)")
+      .as[(String, Timestamp)]
+  }
+
+  // Función para realizar el broadcast join y enriquecer los datos
+  def enrichData(sensorDataDS: Dataset[SensorData], zonesDF: DataFrame): DataFrame = {
+    sensorDataDS.join(
+      broadcast(zonesDF),
+      sensorDataDS("sensorId") === zonesDF("sensorId"),
+      "left"
+    ).select(
+      sensorDataDS("sensorId"),
+      sensorDataDS("timestamp"),
+      sensorDataDS("temperature"),
+      sensorDataDS("humidity"),
+      col("zoneCode"),
+      col("zoneId"),
+      col("sensorLatitude"),
+      col("sensorLongitude"),
+      col("sensorType")
+    )
+  }
+
+}
+
 object Main extends App {
 
-  // Clase para representar los datos de un sensor de temperatura y humedad
-  case class TemperatureHumidityData(sensorId: SensorId, temperature: Double, humidity: Double, timestamp: Timestamp)
-
-  // Clase para representar todos los datos de los sensores
-  case class SensorData(sensorId: SensorId, timestamp: Timestamp, temperature: Option[Double], humidity: Option[Double])
-
-  // Configuración de Spark Session
-  val spark = SparkSession.builder
+   // Configuración de Spark Session
+  // Acostúmbrate a usar el implicit para pasar la sesión de Spark
+  implicit val spark = SparkSession.builder
     .appName("IoT Farm Monitoring")
     .master("local[*]")
     .config("spark.sql.streaming.checkpointLocation", checkpointLocation)
@@ -93,7 +125,8 @@ object Main extends App {
   zonasDF.show(false)
 
   // Explode de las zonas y sensores para crear una tabla relacional
-  val zonasExplodedDF = zonasDF
+  // Mario: Esto mejor lo pasas a una función
+  val zonasExplodedDF: DataFrame = zonasDF
     .withColumn("zona", explode(col("zonas")))
     .select(
       col("zona.id").alias("zoneCode"),
@@ -114,21 +147,9 @@ object Main extends App {
   println("Zonas Exploded DF:")
   zonasExplodedDF.show(false)
 
-  // Función para devolver un Dataset con una tupla de (valor, timestamp) desde Kafka
-  def getKafkaStream(topic: String, spark: SparkSession): Dataset[(String, Timestamp)] = {
-    import spark.implicits._
-    spark.readStream
-      .format("kafka")
-      .option("kafka.bootstrap.servers", kafkaBootstrapServers)
-      .option("subscribe", topic)
-      .option("startingOffsets", "latest")
-      .load()
-      .selectExpr("CAST(value AS STRING)", "CAST(timestamp AS TIMESTAMP)")
-      .as[(String, Timestamp)]
-  }
 
   // Leer datos de Kafka para sensores de temperatura y humedad
-  val temperatureHumidityDS: Dataset[SensorData] = getKafkaStream(temperatureHumidityTopic, spark).flatMap {
+  val temperatureHumidityDS: Dataset[SensorData] = HelperFunctions.getKafkaStream(temperatureHumidityTopic).flatMap {
     case (value, timestamp) =>
       println(s"Raw data from Kafka: $value at $timestamp") // Depuración
       validarDatosSensorTemperatureHumidity(value, timestamp, errorCounter).map(th =>
@@ -143,24 +164,6 @@ object Main extends App {
   println("Temperature Humidity DS:")
   withWatermarkDS.printSchema()
 
-  // Función para realizar el broadcast join y enriquecer los datos
-  def enrichData(sensorDataDS: Dataset[SensorData], zonesDF: DataFrame): DataFrame = {
-    sensorDataDS.join(
-      broadcast(zonesDF),
-      sensorDataDS("sensorId") === zonesDF("sensorId"),
-      "left"
-    ).select(
-      sensorDataDS("sensorId"),
-      sensorDataDS("timestamp"),
-      sensorDataDS("temperature"),
-      sensorDataDS("humidity"),
-      col("zoneCode"),
-      col("zoneId"),
-      col("sensorLatitude"),
-      col("sensorLongitude"),
-      col("sensorType")
-    )
-  }
 
   // Definir el stream de consulta
   val query = withWatermarkDS.writeStream

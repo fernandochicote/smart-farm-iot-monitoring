@@ -5,7 +5,6 @@ import java.sql.Timestamp
 import org.scalatest.BeforeAndAfterAll
 import com.github.mrpowers.spark.fast.tests.DatasetComparer
 import main.{DataValidations, SensorIdEnum}
-import main.Main.TemperatureHumidityData
 
 class DataValidationTests extends AnyFunSuite with BeforeAndAfterAll with DatasetComparer {
 /*
