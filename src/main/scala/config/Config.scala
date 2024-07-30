@@ -19,6 +19,7 @@ object Config {
   // Rutas de directorios
   val rutaBase = "./tmp/"
   val sufijoCheckpoint ="_chk"
+  // Nunca trabajes con rutas absolutas a no ser que chequees que el archivo existe
   val zonesJson = "./files/zones.json"
 
 
