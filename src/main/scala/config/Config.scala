@@ -19,7 +19,7 @@ object Config {
   // Rutas de directorios
   val rutaBase = "./tmp/"
   val sufijoCheckpoint ="_chk"
-  val zonesJson = "/home/kafka/workspace/repos/smart-farm-iot-monitoring/files/zones.json"
+  val zonesJson = "./files/zones.json"
 
 
   object Tablas {

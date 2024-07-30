@@ -1,13 +1,12 @@
 package main
 
 // Importaciones de Spark y configuración
-import config.Config
 import config.Config._
 import main.DataValidations.validarDatosSensorTemperatureHumidity
 import main.Main.TemperatureHumidityData
 import main.SensorIdEnum._
-import org.apache.spark.sql.functions.{col, explode, broadcast, window, avg}
-import org.apache.spark.sql.{Dataset, SparkSession, DataFrame}
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.{DataFrame, Dataset, SparkSession}
 import org.apache.spark.util.LongAccumulator
 
 // Importaciones estándar de Java y Scala
