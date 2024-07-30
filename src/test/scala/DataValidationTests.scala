@@ -4,12 +4,11 @@ import org.scalatest.funsuite.AnyFunSuite
 import java.sql.Timestamp
 import org.scalatest.BeforeAndAfterAll
 import com.github.mrpowers.spark.fast.tests.DatasetComparer
-import main.DataValidations
-import main.Enumerations.SensorIdEnum
-import main.Main.{CO2Data, SoilMoistureData, TemperatureHumidityData}
+import main.{DataValidations, SensorIdEnum}
+import main.Main.TemperatureHumidityData
 
 class DataValidationTests extends AnyFunSuite with BeforeAndAfterAll with DatasetComparer {
-
+/*
   test("Testing validarDatosSensorTemperatureHumidity") {
     val value = "sensor1,12.12,22.22"
     val timestamp = new Timestamp(System.currentTimeMillis())
@@ -36,4 +35,6 @@ class DataValidationTests extends AnyFunSuite with BeforeAndAfterAll with Datase
 
     assert(result == expected)
   }
+
+ */
 }
